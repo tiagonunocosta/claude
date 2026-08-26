@@ -89,9 +89,15 @@ deliberado — um monitor mudo é a falha que mais engana.
 O feed de notícias não é decoração: a FPF **anuncia a data de abertura antes de
 a venda abrir**, e a imprensa noticia-o. Na prática o feed tende a avisar
 primeiro. É também o alvo mais robusto — RSS é XML puro, sem JavaScript e sem
-proteção anti-bot, exatamente onde a bilheteira é mais frágil.
+proteção anti-bot, exatamente onde a bilheteira é mais frágil. Neste momento é
+o **único** canal a funcionar em GitHub Actions.
 
-Corre no mesmo motor, com três diferenças declaradas na config:
+Um feed é analisado **notícia a notícia**, e um item só conta quando traz as
+duas coisas: um termo do evento (`sinais_contexto`: *noruega*, *dragão*,
+*liga das nações*) **e** um termo de venda. Sem essa exigência dupla, qualquer
+notícia de bilhetes do país dispara um alerta — e disparou.
+
+Diferenças declaradas na config:
 
 - `sinais_bloqueio: []` — numa notícia "em breve" é informação, não é estado da
   bilheteira, e não deve calar um alerta.
@@ -144,24 +150,35 @@ caladamente e passa a abrir um issue a dizer que está cego.
 `SEM_CONTEUDO` não espera pelo limiar — nesse caso já sabemos que a leitura
 não serve. Uma leitura útil, qualquer que seja o veredicto, reinicia a contagem.
 
-## O limite honesto deste monitor
+## O que cinco corridas reais mostraram
 
-O script foi escrito **sem acesso à bilheteira real** (a rede da sessão onde foi
-desenvolvido bloqueia `fpf.pt` — devolve `403` no túnel), por isso os sinais de
-texto são um palpite informado, validado apenas contra as *fixtures* em
-`tests/fixtures/`. A lógica está testada; o contacto com o site não.
+O script foi escrito sem acesso à bilheteira (a rede da sessão de
+desenvolvimento bloqueia `fpf.pt`), validado só contra as *fixtures*. Cinco
+corridas reais no GitHub Actions revelaram, cada uma, um defeito diferente —
+e nenhum deles aparecia nos 44 testes que existiam na altura:
 
-Dois riscos, por ordem de probabilidade:
+| # | O que se descobriu | Correção |
+|---|---|---|
+| 1 | bilheteira devolve `HTTP 403` ao runner; feed lê 10.786 bytes | segundo perfil de cabeçalhos |
+| 2 | 403 passado, mas a página dá **0 caracteres** de texto | nada a fazer por HTTP simples |
+| 3 | feed com 8.452 caracteres e hash = SHA-256 de `""` — zero ocorrências de "Noruega" | deixar de filtrar duas vezes |
+| 4 | **falso positivo**: alertou com notícias do Famalicão, do FC Porto e dos MEGADETH | exigir evento **E** venda no mesmo item |
+| 5 | `SEM_SINAL`, zero acertos, sem alerta | confirmação |
 
-1. **Proteção anti-bot da Cloudflare.** `bilheteira.fpf.pt` está atrás da
-   Cloudflare (IPs `104.18.10.225` / `104.18.11.225`). Bilheteiras são alvo de
-   bots de revenda e costumam ter a proteção alta. Um pedido de `urllib` pode
-   levar `403` ou um desafio JavaScript — e é **mais provável nos runners do
-   GitHub**, que saem de IPs de datacenter, do que do teu IP doméstico.
-2. **Página renderizada em JavaScript.** O HTML inicial não traria o texto dos
-   eventos → `SEM_CONTEUDO`.
+### A bilheteira não é legível por HTTP simples
 
-Em qualquer dos casos o monitor **avisa** em vez de ficar calado (ver o
+`bilheteira.fpf.pt` está atrás da Cloudflare (`104.18.10.225`). O primeiro
+perfil de cabeçalhos leva `403`; o segundo passa, e o que vem por trás são
+**3830 bytes de HTML com 0 caracteres de texto** — aplicação JavaScript ou
+interstício de desafio. Não é problema que se resolva com cabeçalhos.
+
+### O Google News não respeita o AND das aspas
+
+A pesquisa `bilhetes "Portugal" "Noruega"` devolveu notícias sobre o
+Famalicão-Gil Vicente, a Supertaça e um concerto dos MEGADETH. **O âmbito tem
+de ser imposto no código, não delegado na pesquisa** — daí os `sinais_contexto`.
+
+Ambos os casos fazem o monitor **avisar** em vez de ficar calado (ver o
 interruptor de homem morto, acima). Mas vale mais descobrir agora:
 
 ```bash
@@ -180,10 +197,11 @@ interruptor de homem morto, acima). Mas vale mais descobrir agora:
 python3 -m unittest discover -s tests -v
 ```
 
-44 testes, sem rede: cobrem cada estado, a precedência do bloqueio sobre o botão
+69 testes, sem rede: cobrem cada estado, a precedência do bloqueio sobre o botão
 de compra, a deteção de mudança, a extração de texto e de RSS, os códigos de
 saída, a escalada do interruptor de homem morto, a herança de opções por alvo e
-quando o push sai (incluindo que uma falha a notificar não derruba o veredicto).
+quando o push sai, e a exigência dupla nas notícias — com os títulos reais que
+provocaram o falso positivo da corrida #4 como teste de regressão.
 
 ## Ajustar sem tocar no código
 
