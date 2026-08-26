@@ -330,5 +330,64 @@ class TestExtracaoRSS(unittest.TestCase):
         self.assertIn("pré-venda", cb.html_para_texto(html))
 
 
+class TestNotificacao(unittest.TestCase):
+    """Quem notifica e o script/workflow, nao uma pessoa a olhar. Estes testes
+    fixam quando o push sai e quando nao sai."""
+
+    def setUp(self):
+        self.enviados = []
+        self._original = cb.enviar_ntfy
+        cb.enviar_ntfy = lambda topico, titulo, corpo, url: self.enviados.append(
+            {"topico": topico, "titulo": titulo, "corpo": corpo}
+        )
+
+    def tearDown(self):
+        cb.enviar_ntfy = self._original
+
+    def _corre(self, extra, estado):
+        return cb.main(["--estado", str(estado), "--ntfy", "topico-de-teste", "--json"] + extra)
+
+    def test_push_quando_a_venda_abre(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            codigo = self._corre(
+                ["--fixture", str(FIXTURES / "a_venda.html")], Path(tmp) / "e.json"
+            )
+            self.assertEqual(codigo, 10)
+            self.assertEqual(len(self.enviados), 1)
+            self.assertIn("A_VENDA", self.enviados[0]["titulo"])
+
+    def test_sem_push_quando_nada_muda(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            codigo = self._corre(
+                ["--fixture", str(FIXTURES / "em_breve.html")], Path(tmp) / "e.json"
+            )
+            self.assertEqual(codigo, 0)
+            self.assertEqual(self.enviados, [])
+
+    def test_push_quando_o_monitor_fica_cego(self):
+        """A falha que mais engana e o monitor mudo: tem de avisar tambem."""
+        with tempfile.TemporaryDirectory() as tmp:
+            estado = Path(tmp) / "e.json"
+            self._corre(["--url", "http://127.0.0.1:1/", "--limiar-falhas", "2"], estado)
+            self.assertEqual(self.enviados, [])  # 1a falha: pode ser um blip
+            codigo = self._corre(["--url", "http://127.0.0.1:1/", "--limiar-falhas", "2"], estado)
+            self.assertEqual(codigo, 2)
+            self.assertEqual(len(self.enviados), 1)
+            self.assertIn("CEGO", self.enviados[0]["titulo"])
+            self.assertIn("silencio", self.enviados[0]["corpo"])
+
+    def test_falha_a_notificar_nao_derruba_a_verificacao(self):
+        """Se o ntfy estiver em baixo, o veredicto tem de sobreviver."""
+        def rebenta(*_args, **_kwargs):
+            raise OSError("ntfy inacessivel")
+
+        cb.enviar_ntfy = rebenta
+        with tempfile.TemporaryDirectory() as tmp:
+            codigo = self._corre(
+                ["--fixture", str(FIXTURES / "a_venda.html")], Path(tmp) / "e.json"
+            )
+            self.assertEqual(codigo, 10)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

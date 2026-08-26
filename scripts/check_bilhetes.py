@@ -555,11 +555,16 @@ def main(argv: list[str] | None = None) -> int:
             if r.get("extrato"):
                 print(f"    extrato         : {r['extrato'][:240]}")
 
-    if alerta:
-        titulo = f"Bilhetes: {estado_global}"
+    # O push tambem sai quando o monitor fica cego. Um monitor mudo e a falha
+    # que mais engana: sem este aviso, a ausencia de notificacao passaria por
+    # "ainda nao abriu".
+    if alerta or monitor_cego:
+        titulo = ("Bilhetes: " + estado_global) if alerta else "Monitor de bilhetes CEGO"
         corpo = f"{cfg['evento']}\n{relatorio['explicacao']}\n" + "\n".join(
             f"- {r.get('nome', r['url'])}: {r['estado']}" for r in resultados
         )
+        if monitor_cego and not alerta:
+            corpo += "\n\nNao interpretes o silencio como 'ainda nao abriu'."
         essencial_url = next((r["url"] for r in resultados if r.get("essencial", True)), None)
         primeiro_url = essencial_url or "https://bilheteira.fpf.pt/"
         if args.ntfy:

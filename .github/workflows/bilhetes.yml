@@ -44,6 +44,12 @@ jobs:
 
       - name: Verificar bilheteira
         id: verificar
+        env:
+          # Opcional: cria o secret NTFY_TOPICO em Settings > Secrets and
+          # variables > Actions para receber push no telefone via ntfy.sh.
+          # Sem o secret, esta variavel vem vazia e o script ignora-a.
+          NTFY_TOPICO: ${{ secrets.NTFY_TOPICO }}
+          BILHETES_WEBHOOK: ${{ secrets.BILHETES_WEBHOOK }}
         run: |
           set +e
           python3 scripts/check_bilhetes.py --json > relatorio.json
