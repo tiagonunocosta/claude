@@ -176,5 +176,73 @@ class TestCLI(unittest.TestCase):
             self.assertEqual(gravado[chave]["estado"], cb.BLOQUEADO)
 
 
+class TestMonitorCego(unittest.TestCase):
+    """Um monitor que falha em silencio e pior do que nenhum: transforma
+    'nao recebi aviso' em 'ainda nao abriu'. Estes testes guardam essa porta."""
+
+    # Porta 1 em localhost: recusa a ligacao de imediato, sem tocar na rede.
+    URL_MORTO = "http://127.0.0.1:1/"
+
+    def _corre(self, estado, limiar=3):
+        return cb.main([
+            "--url", self.URL_MORTO,
+            "--estado", str(estado),
+            "--limiar-falhas", str(limiar),
+            "--json",
+        ])
+
+    def test_falha_isolada_devolve_1(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            estado = Path(tmp) / "estado.json"
+            self.assertEqual(self._corre(estado), 1)
+
+    def test_falhas_repetidas_escalam_para_2(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            estado = Path(tmp) / "estado.json"
+            self.assertEqual(self._corre(estado), 1)  # 1a falha
+            self.assertEqual(self._corre(estado), 1)  # 2a falha
+            self.assertEqual(self._corre(estado), 2)  # 3a: monitor cego, avisa
+            self.assertEqual(self._corre(estado), 2)  # continua a avisar
+
+    def test_contagem_de_falhas_persiste(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            estado = Path(tmp) / "estado.json"
+            self._corre(estado)
+            self._corre(estado)
+            meta = json.loads(estado.read_text(encoding="utf-8"))["_meta"]
+            self.assertEqual(meta["falhas_consecutivas"], 2)
+            self.assertEqual(meta["ultimo_estado"], cb.ERRO)
+
+    def test_leitura_boa_reinicia_a_contagem(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            estado = Path(tmp) / "estado.json"
+            self._corre(estado)
+            self._corre(estado)
+            # Uma leitura util a seguir tem de limpar o historico de falhas.
+            cb.main(["--fixture", str(FIXTURES / "em_breve.html"), "--estado", str(estado), "--json"])
+            meta = json.loads(estado.read_text(encoding="utf-8"))["_meta"]
+            self.assertEqual(meta["falhas_consecutivas"], 0)
+
+    def test_pagina_javascript_avisa_a_primeira(self):
+        """SEM_CONTEUDO nao espera pelo limiar: sabemos ja que nao serve."""
+        with tempfile.TemporaryDirectory() as tmp:
+            codigo = cb.main([
+                "--fixture", str(FIXTURES / "shell_javascript.html"),
+                "--estado", str(Path(tmp) / "estado.json"),
+                "--limiar-falhas", "99",
+                "--json",
+            ])
+            self.assertEqual(codigo, 2)
+
+    def test_meta_nao_e_confundido_com_um_url(self):
+        """A chave _meta convive com as chaves de URL sem as corromper."""
+        with tempfile.TemporaryDirectory() as tmp:
+            estado = Path(tmp) / "estado.json"
+            cb.main(["--fixture", str(FIXTURES / "em_breve.html"), "--estado", str(estado)])
+            gravado = json.loads(estado.read_text(encoding="utf-8"))
+            self.assertIn("_meta", gravado)
+            self.assertEqual(len([k for k in gravado if k != "_meta"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

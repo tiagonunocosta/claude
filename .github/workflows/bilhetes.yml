@@ -56,8 +56,10 @@ jobs:
             codigo=1
           fi
           estado=$(python3 -c 'import json;print(json.load(open("relatorio.json"))["estado"])')
+          falhas=$(python3 -c 'import json;print(json.load(open("relatorio.json")).get("falhas_consecutivas",0))')
           echo "codigo=$codigo" >> "$GITHUB_OUTPUT"
           echo "estado=$estado" >> "$GITHUB_OUTPUT"
+          echo "falhas=$falhas" >> "$GITHUB_OUTPUT"
           cat relatorio.json
 
       - name: Resumo
@@ -68,6 +70,7 @@ jobs:
             echo
             echo "- **Estado:** \`${{ steps.verificar.outputs.estado }}\`"
             echo "- **Codigo de saida:** \`${{ steps.verificar.outputs.codigo }}\`"
+            echo "- **Falhas consecutivas:** \`${{ steps.verificar.outputs.falhas }}\`"
             echo
             echo '```json'
             cat relatorio.json 2>/dev/null || echo '{}'
@@ -107,14 +110,29 @@ jobs:
               return linhas.join('\n');
             }).join('\n');
 
+            const porJavaScript = rel.resultados.some(r => r.estado === 'SEM_CONTEUDO');
+            const causa = porJavaScript
+              ? 'a pagina responde mas nao traz texto analisavel (conteudo carregado por JavaScript)'
+              : `falharam ${rel.falhas_consecutivas} leituras seguidas (provavelmente a protecao anti-bot da Cloudflare a recusar o IP do runner)`;
+
             const cabecalho = eProblema
               ? [
-                  'A verificacao automatica **nao esta a conseguir ler a pagina** da bilheteira',
-                  '(provavelmente conteudo carregado por JavaScript). Enquanto isto nao for',
-                  'resolvido, o monitor nao deteta a abertura da venda -- nao confies nele.',
+                  '## O monitor esta cego',
                   '',
-                  'Para investigar: `python3 scripts/check_bilhetes.py --guardar-html /tmp/paginas`',
-                  'e ver o HTML que sai de la.',
+                  `A verificacao automatica **nao esta a conseguir ler a bilheteira**: ${causa}.`,
+                  '',
+                  '**Nao interpretes o silencio deste monitor como "os bilhetes ainda nao abriram".**',
+                  'Enquanto isto nao for resolvido, ele nao deteta a abertura da venda.',
+                  '',
+                  'Como investigar, do teu computador (IP domestico passa onde o runner nao passa):',
+                  '',
+                  '```bash',
+                  'python3 scripts/check_bilhetes.py --guardar-html /tmp/paginas',
+                  '```',
+                  '',
+                  porJavaScript
+                    ? 'Se o HTML guardado vier vazio, a correcao e apontar `--url` ao endpoint JSON que a pagina consome.'
+                    : 'Se localmente funcionar, o problema e o IP do runner: passa o agendamento para cron local.',
                 ].join('\n')
               : [
                   `**${rel.explicacao}**`,
@@ -129,6 +147,8 @@ jobs:
               `**Evento:** ${rel.evento}`,
               `**Estado:** \`${rel.estado}\``,
               `**Verificado em:** ${rel.verificado_em}`,
+              rel.falhas_consecutivas ? `**Leituras falhadas seguidas:** ${rel.falhas_consecutivas}` : '',
+              rel.estado_restaurado === false ? '**Nota:** sem estado anterior nesta corrida (cache perdida) -- a detecao de mudanca fica inativa ate a proxima.' : '',
               '',
               '### Detalhe por pagina',
               corpoDetalhe,

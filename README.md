@@ -79,31 +79,55 @@ Só precisa de Python 3.9+. **Sem dependências** — apenas a biblioteca padrã
 
 | Estado | Significado | Saída |
 |---|---|---|
-| `A_VENDA` | sinais de compra na janela do evento | **10** |
-| `ALTEROU` | a página do evento mudou desde a última corrida | **10** |
-| `SEM_CONTEUDO` | página sem texto analisável (JavaScript) — **verificação não fiável** | 2 |
+| `A_VENDA` | sinais de compra na janela do evento | **10** — avisa |
+| `ALTEROU` | a página do evento mudou desde a última corrida | **10** — avisa |
+| `SEM_CONTEUDO` | página sem texto analisável (JavaScript) | **2** — monitor cego, avisa |
+| `ERRO` × 3 seguidas | não consegue ler a página | **2** — monitor cego, avisa |
 | `BLOQUEADO` | listado, mas "esgotado" / "em breve" | 0 |
 | `SEM_SINAL` | listado, sem sinais reconhecidos | 0 |
 | `NAO_LISTADO` | o evento ainda não aparece | 0 |
-| `ERRO` | não foi possível ler a página | 1 |
+| `ERRO` isolado | falha de leitura pontual (blip de rede) | 1 |
+
+### O interruptor de homem morto
+
+Um monitor que falha em silêncio é **pior** do que nenhum monitor, porque
+transforma "não recebi aviso" em "ainda não abriu". Por isso a contagem de
+leituras falhadas vive no ficheiro de estado: ao atingir `--limiar-falhas`
+(3 por omissão, ou seja um dia de corridas), o script deixa de devolver 1
+caladamente e passa a abrir um issue a dizer que está cego.
+
+`SEM_CONTEUDO` não espera pelo limiar — nesse caso já sabemos que a leitura
+não serve. Uma leitura útil, qualquer que seja o veredicto, reinicia a contagem.
 
 ## O limite honesto deste monitor
 
-O script foi escrito **sem eu poder abrir a bilheteira real** (a rede da sessão
-onde foi desenvolvido bloqueia `fpf.pt`), por isso os sinais de texto são um
-palpite informado, validado apenas contra as *fixtures* em `tests/fixtures/`.
+O script foi escrito **sem acesso à bilheteira real** (a rede da sessão onde foi
+desenvolvido bloqueia `fpf.pt` — devolve `403` no túnel), por isso os sinais de
+texto são um palpite informado, validado apenas contra as *fixtures* em
+`tests/fixtures/`. A lógica está testada; o contacto com o site não.
 
-Se a bilheteira for uma aplicação JavaScript, o HTML inicial não traz o texto
-dos eventos e o script devolve `SEM_CONTEUDO` — e diz-te isso em vez de ficar
-calado a fingir que está a vigiar. **Corre-o uma vez à mão antes de confiar nele:**
+Dois riscos, por ordem de probabilidade:
+
+1. **Proteção anti-bot da Cloudflare.** `bilheteira.fpf.pt` está atrás da
+   Cloudflare (IPs `104.18.10.225` / `104.18.11.225`). Bilheteiras são alvo de
+   bots de revenda e costumam ter a proteção alta. Um pedido de `urllib` pode
+   levar `403` ou um desafio JavaScript — e é **mais provável nos runners do
+   GitHub**, que saem de IPs de datacenter, do que do teu IP doméstico.
+2. **Página renderizada em JavaScript.** O HTML inicial não traria o texto dos
+   eventos → `SEM_CONTEUDO`.
+
+Em qualquer dos casos o monitor **avisa** em vez de ficar calado (ver o
+interruptor de homem morto, acima). Mas vale mais descobrir agora:
 
 ```bash
 ./scripts/check_bilhetes.py --guardar-html /tmp/paginas
 ```
 
-Se der `SEM_CONTEUDO`, o HTML guardado em `/tmp/paginas` mostra com o que
-estamos a lidar, e a correção é apontar o script ao endpoint JSON que a página
-usa (via `--url`) em vez do HTML.
+- `BLOQUEADO` ou `SEM_SINAL` → está a ler a página; o agendamento é fiável.
+- `SEM_CONTEUDO` → o HTML em `/tmp/paginas` mostra com o que lidamos; a correção
+  é apontar `--url` ao endpoint JSON que a página consome.
+- `ERRO` local mas o workflow também falha → é o IP do runner. Passa o
+  agendamento para cron local, que sai do teu IP doméstico.
 
 ## Testes
 
@@ -111,8 +135,9 @@ usa (via `--url`) em vez do HTML.
 python3 -m unittest discover -s tests -v
 ```
 
-25 testes, sem rede: cobrem cada estado, a precedência do bloqueio sobre o botão
-de compra, a deteção de mudança, a extração de texto e os códigos de saída.
+31 testes, sem rede: cobrem cada estado, a precedência do bloqueio sobre o botão
+de compra, a deteção de mudança, a extração de texto, os códigos de saída e a
+escalada do interruptor de homem morto.
 
 ## Ajustar sem tocar no código
 

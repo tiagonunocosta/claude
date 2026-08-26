@@ -20,9 +20,15 @@ Como funciona, em tres passos:
 Codigos de saida (pensados para o cron/CI decidir se notifica):
   0   nada a reportar (evento nao listado, esgotado, ou "em breve")
   10  ALERTA -- bilhetes aparentemente a venda, ou a pagina do evento mudou
-  2   problema de configuracao -- a pagina nao trouxe texto analisavel
-      (tipicamente um site em JavaScript); a verificacao nao e fiavel
-  1   erro de rede/execucao em todos os alvos
+  2   O MONITOR ESTA CEGO -- ou a pagina nao trouxe texto analisavel
+      (tipicamente um site em JavaScript), ou falhou a leitura em varias
+      corridas seguidas. Em qualquer dos casos: nao confies no silencio.
+  1   erro de leitura isolado (pode ser um blip de rede)
+
+Sobre o codigo 2: um monitor que falha em silencio e pior do que nenhum,
+porque transforma "nao recebi aviso" em "ainda nao abriu". Por isso a
+contagem de falhas consecutivas vive no ficheiro de estado, e ao atingir
+--limiar-falhas o script passa a gritar em vez de devolver 1 caladamente.
 """
 
 from __future__ import annotations
@@ -356,6 +362,8 @@ def construir_parser() -> argparse.ArgumentParser:
     p.add_argument("--estado", type=Path, default=ESTADO_OMISSAO, help="ficheiro de estado")
     p.add_argument("--sem-estado", action="store_true", help="nao ler nem gravar estado")
     p.add_argument("--timeout", type=float, default=30.0, help="timeout de rede em segundos")
+    p.add_argument("--limiar-falhas", type=int, default=3, metavar="N",
+                   help="apos N leituras falhadas seguidas, tratar como monitor cego (omissao: 3)")
     p.add_argument("--json", action="store_true", help="imprime o relatorio em JSON")
     p.add_argument("--fixture", type=Path, action="append",
                    help="analisa um ficheiro HTML local em vez de ir a rede (para testes)")
@@ -372,7 +380,10 @@ def main(argv: list[str] | None = None) -> int:
     args = construir_parser().parse_args(argv)
     cfg = carregar_config(args.config, args)
 
+    estado_restaurado = (not args.sem_estado) and args.estado.exists()
     estado = {} if args.sem_estado else ler_estado(args.estado)
+    meta = estado.get("_meta", {}) if isinstance(estado.get("_meta"), dict) else {}
+    falhas_anteriores = int(meta.get("falhas_consecutivas", 0) or 0)
     agora = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
     alvos: list[tuple[str, str | None, str | None]] = []  # (rotulo, html, erro)
@@ -409,9 +420,6 @@ def main(argv: list[str] | None = None) -> int:
                 "visto_em": agora,
             }
 
-    if not args.sem_estado:
-        gravar_estado(args.estado, estado)
-
     estado_global = max(
         (r["estado"] for r in resultados),
         key=lambda e: GRAVIDADE.get(e, 0),
@@ -419,12 +427,30 @@ def main(argv: list[str] | None = None) -> int:
     )
     alerta = estado_global in (A_VENDA, ALTEROU)
 
+    # "Leitura util" = conseguimos mesmo ver a pagina, seja o que for que diga.
+    # ERRO e SEM_CONTEUDO nao contam: nesses casos nao sabemos nada.
+    leitura_util = estado_global not in (ERRO, SEM_CONTEUDO)
+    falhas = 0 if leitura_util else falhas_anteriores + 1
+    monitor_cego = (estado_global == SEM_CONTEUDO) or (falhas >= args.limiar_falhas)
+
+    if not args.sem_estado:
+        estado["_meta"] = {
+            "falhas_consecutivas": falhas,
+            "ultima_corrida": agora,
+            "ultimo_estado": estado_global,
+        }
+        gravar_estado(args.estado, estado)
+
     relatorio = {
         "evento": cfg["evento"],
         "verificado_em": agora,
         "estado": estado_global,
         "explicacao": EXPLICACAO.get(estado_global, estado_global),
         "alerta": alerta,
+        "monitor_cego": monitor_cego,
+        "falhas_consecutivas": falhas,
+        "limiar_falhas": args.limiar_falhas,
+        "estado_restaurado": estado_restaurado,
         "resultados": resultados,
     }
 
@@ -434,6 +460,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Evento     : {cfg['evento']}")
         print(f"Verificado : {agora}")
         print(f"Estado     : {estado_global} -- {relatorio['explicacao']}")
+        if falhas:
+            print(f"Falhas     : {falhas} leitura(s) seguida(s) sem resultado util")
+        if monitor_cego:
+            print("AVISO      : o monitor esta CEGO -- nao interpretes o silencio")
+            print("             como 'ainda nao abriu'. Corre com --guardar-html")
+            print("             e ve o que a pagina esta a devolver.")
+        if not args.sem_estado and not estado_restaurado:
+            print("Nota       : sem estado anterior; a deteccao de mudanca so")
+            print("             fica ativa a partir da proxima corrida.")
         for r in resultados:
             print(f"\n  {r['url']}")
             print(f"    estado          : {r['estado']}")
@@ -470,7 +505,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if alerta:
         return 10
-    if estado_global == SEM_CONTEUDO:
+    if monitor_cego:
         return 2
     if estado_global == ERRO:
         return 1
