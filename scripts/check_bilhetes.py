@@ -199,6 +199,30 @@ def itens_do_feed(documento: str) -> list[str]:
     return [m.group(0) for m in PADRAO_ITEM.finditer(documento)]
 
 
+PADRAO_TITULO = re.compile(r"<title[^>]*>(.*?)</title\s*>", re.IGNORECASE | re.DOTALL)
+
+
+def titulos_do_feed(documento: str, maximo: int = 8) -> list[str]:
+    """Os titulos das noticias, para diagnostico.
+
+    Quando um feed traz itens mas nenhum casa com o `match`, sem isto nao se
+    percebe se o problema e a pesquisa ou o `match` -- foi exatamente o que
+    aconteceu com "noruega": o Google filtra pelo corpo do artigo, mas o RSS
+    so traz o titulo, e o nome do pais nao vinha la.
+    """
+    titulos: list[str] = []
+    for item in itens_do_feed(documento):
+        achado = PADRAO_TITULO.search(item)
+        if not achado:
+            continue
+        bruto = achado.group(1).strip()
+        bruto = re.sub(r"^<!\[CDATA\[|\]\]>$", "", bruto).strip()
+        titulos.append(normalizar_espacos(html_para_texto(bruto)))
+        if len(titulos) >= maximo:
+            break
+    return titulos
+
+
 def html_para_texto(html: str) -> str:
     extrator = ExtratorTexto()
     try:
@@ -319,6 +343,9 @@ def analisar(url: str, html: str, cfg: dict, estado_anterior: dict | None) -> di
         resultado["estado"] = SEM_CONTEUDO
         resultado["extrato"] = texto[:300]
         return resultado
+
+    if feed:
+        resultado["titulos"] = titulos_do_feed(html)
 
     janelas = recortar_janelas(texto, cfg["match"], cfg["janela"])
     if not janelas:
@@ -626,6 +653,10 @@ def main(argv: list[str] | None = None) -> int:
                 print("    preco visivel   : sim")
             if r.get("nota"):
                 print(f"    nota            : {r['nota']}")
+            if r.get("titulos"):
+                print("    notícias no feed:")
+                for titulo_item in r["titulos"]:
+                    print(f"      · {titulo_item[:110]}")
             if r.get("extrato"):
                 print(f"    extrato         : {r['extrato'][:240]}")
 

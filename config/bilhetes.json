@@ -45,7 +45,7 @@
       "url": "https://news.google.com/rss/search?q=bilhetes%20%22Portugal%22%20%22Noruega%22%20when%3A45d&hl=pt-PT&gl=PT&ceid=PT:pt",
       "essencial": false,
       "detetar_mudanca": false,
-      "janela": 250,
+      "janela": 300,
       "min_texto": 40,
       "sinais_bloqueio": [],
       "sinais_venda": [
@@ -64,7 +64,8 @@
         "ja pode comprar",
         "já pode comprar",
         "bilhetes para o portugal"
-      ]
+      ],
+      "match": "bilhet"
     }
   ]
 }

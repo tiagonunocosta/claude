@@ -118,6 +118,14 @@ jobs:
               if (r.tamanho_html !== undefined)
                 linhas.push(`  - ${r.formato || '?'}: ${r.tamanho_html} bytes de HTML, ${r.tamanho_texto} caracteres de texto`);
               if (r.erro) linhas.push(`  - erro: ${r.erro}`);
+              // Os titulos dizem se o feed trouxe noticias e o match falhou,
+              // ou se simplesmente nao ha noticias.
+              if (r.titulos?.length) {
+                linhas.push('  - noticias no feed:');
+                r.titulos.forEach(t => linhas.push(`    - ${t.slice(0, 140)}`));
+              } else if (r.formato === 'feed') {
+                linhas.push('  - o feed nao trouxe noticias nenhumas');
+              }
               if (r.extrato) linhas.push(`  - extrato: \`${r.extrato.slice(0, 300).replace(/`/g, "'")}\``);
               return linhas.join('\n');
             }).join('\n');

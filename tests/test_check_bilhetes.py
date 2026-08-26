@@ -257,10 +257,18 @@ class TestAlvoDeNoticias(unittest.TestCase):
 
     def test_opcoes_herdadas_e_redefinidas(self):
         alvo = self.alvo_noticias()
-        self.assertEqual(alvo["match"], "noruega")          # herdado
+        self.assertEqual(alvo["min_texto"], 40)             # redefinido
         self.assertEqual(alvo["sinais_bloqueio"], [])       # redefinido
         self.assertFalse(alvo["detetar_mudanca"])           # redefinido
         self.assertLess(alvo["janela"], CONFIG["janela"])   # redefinido
+
+    def test_feed_nao_se_ancora_no_nome_do_pais(self):
+        """O Google filtra pelo corpo do artigo; o RSS so traz o titulo. Exigir
+        "Noruega" no titulo descartava todas as noticias -- foi o que uma
+        corrida real mostrou (8452 caracteres de itens, zero ocorrencias)."""
+        alvo = self.alvo_noticias()
+        self.assertNotEqual(alvo["match"], "noruega")
+        self.assertIn("bilhet", alvo["match"])
 
     def test_bilheteira_continua_essencial(self):
         alvos = cb.resolver_alvos(CONFIG)
@@ -476,8 +484,10 @@ class TestCabecalhoDoFeed(unittest.TestCase):
         alvo = [a for a in cb.resolver_alvos(CONFIG) if not a["essencial"]][0]
         r = cb.analisar("feed://teste", self.FEED_COM_ECO, alvo, None)
         self.assertEqual(r["formato"], "feed")
-        self.assertEqual(r["estado"], cb.NAO_LISTADO)
+        self.assertNotIn(r["estado"], (cb.A_VENDA, cb.ALTEROU))
+        # O que importa: nada do cabecalho do canal entrou no contexto.
         self.assertNotIn("Copyright", r["extrato"] or "")
+        self.assertNotIn("Google Notícias", r["extrato"] or "")
 
     def test_feed_vazio_e_ausencia_de_noticias_nao_cegueira(self):
         """Zero itens significa 'nao ha noticias', nao 'nao consegui ler'."""
@@ -498,6 +508,38 @@ class TestCabecalhoDoFeed(unittest.TestCase):
         r = analisar("rss_venda_anunciada.xml", cfg=alvo)
         self.assertEqual(r["estado"], cb.A_VENDA)
         self.assertIn("Dragão", r["extrato"])
+
+
+class TestTitulosDeDiagnostico(unittest.TestCase):
+    """Quando um feed traz itens mas nenhum casa com o match, sem os titulos
+    nao se percebe se o problema e a pesquisa ou o match."""
+
+    def alvo_noticias(self):
+        return [a for a in cb.resolver_alvos(CONFIG) if not a["essencial"]][0]
+
+    def test_titulos_reportados(self):
+        r = analisar("rss_sem_anuncio.xml", cfg=self.alvo_noticias())
+        self.assertEqual(len(r["titulos"]), 2)
+        self.assertIn("Liga das Nações", r["titulos"][0])
+
+    def test_cdata_nos_titulos(self):
+        feed = ("<rss><channel><item><title><![CDATA[Bilhetes já à venda]]></title>"
+                "</item></channel></rss>")
+        self.assertEqual(cb.titulos_do_feed(feed), ["Bilhetes já à venda"])
+
+    def test_titulo_do_canal_nao_entra(self):
+        titulos = cb.titulos_do_feed(TestCabecalhoDoFeed.FEED_COM_ECO)
+        self.assertEqual(titulos, ["Haaland fala de Oslo"])
+
+    def test_html_nao_produz_titulos(self):
+        r = analisar("em_breve.html")
+        self.assertNotIn("titulos", r)
+
+    def test_maximo_respeitado(self):
+        feed = "<rss><channel>" + "".join(
+            f"<item><title>Notícia {i}</title></item>" for i in range(20)
+        ) + "</channel></rss>"
+        self.assertEqual(len(cb.titulos_do_feed(feed, maximo=5)), 5)
 
 
 if __name__ == "__main__":
