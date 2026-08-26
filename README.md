@@ -43,8 +43,7 @@ Detalhes que valem a pena saber:
 ./scripts/check_bilhetes.py --json     # para outros programas
 ```
 
-Push para o telefone via [ntfy.sh](https://ntfy.sh) (gratuito, sem conta —
-instala a app, subscreve um tópico com um nome que ninguém adivinhe):
+Push para o telefone via [ntfy.sh](https://ntfy.sh):
 
 ```bash
 NTFY_TOPICO=o-meu-topico-difícil-de-adivinhar ./scripts/check_bilhetes.py
@@ -57,6 +56,28 @@ No `crontab -e`, três vezes por dia:
 ```
 
 Só precisa de Python 3.9+. **Sem dependências** — apenas a biblioteca padrão.
+
+## Como chega o aviso até ti
+
+| Canal | Chega onde | Precisa de |
+|---|---|---|
+| **Issue no repo** | email do GitHub | nada — já está ligado |
+| **Push no telefone** | app ntfy | criar o secret `NTFY_TOPICO` |
+| **Webhook** | onde quiseres | criar o secret `BILHETES_WEBHOOK` |
+
+**Testa o canal antes de confiar nele.** Corre o workflow à mão com
+`forcar_alerta: true` e confirma que o email chega mesmo. Se não chegar, é
+porque não estás a observar o repo: *Watch → All Activity*, no canto superior
+direito da página do repositório.
+
+Para push no telefone: instala a app [ntfy](https://ntfy.sh), subscreve um
+tópico com um nome que ninguém adivinhe, e cria esse nome como secret
+`NTFY_TOPICO` em *Settings → Secrets and variables → Actions*. Qualquer pessoa
+que saiba o nome do tópico pode ler as notificações — por isso não uses
+`bilhetes-portugal`.
+
+O push sai em dois casos: **venda detetada** e **monitor cego**. O segundo é
+deliberado — um monitor mudo é a falha que mais engana.
 
 ## Dois alvos
 
@@ -159,9 +180,10 @@ interruptor de homem morto, acima). Mas vale mais descobrir agora:
 python3 -m unittest discover -s tests -v
 ```
 
-40 testes, sem rede: cobrem cada estado, a precedência do bloqueio sobre o botão
+44 testes, sem rede: cobrem cada estado, a precedência do bloqueio sobre o botão
 de compra, a deteção de mudança, a extração de texto e de RSS, os códigos de
-saída, a escalada do interruptor de homem morto e a herança de opções por alvo.
+saída, a escalada do interruptor de homem morto, a herança de opções por alvo e
+quando o push sai (incluindo que uma falha a notificar não derruba o veredicto).
 
 ## Ajustar sem tocar no código
 
