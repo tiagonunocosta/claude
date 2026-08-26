@@ -257,18 +257,18 @@ class TestAlvoDeNoticias(unittest.TestCase):
 
     def test_opcoes_herdadas_e_redefinidas(self):
         alvo = self.alvo_noticias()
-        self.assertEqual(alvo["min_texto"], 40)             # redefinido
         self.assertEqual(alvo["sinais_bloqueio"], [])       # redefinido
         self.assertFalse(alvo["detetar_mudanca"])           # redefinido
-        self.assertLess(alvo["janela"], CONFIG["janela"])   # redefinido
+        self.assertTrue(alvo["sinais_contexto"])            # exclusivo do feed
 
-    def test_feed_nao_se_ancora_no_nome_do_pais(self):
-        """O Google filtra pelo corpo do artigo; o RSS so traz o titulo. Exigir
-        "Noruega" no titulo descartava todas as noticias -- foi o que uma
-        corrida real mostrou (8452 caracteres de itens, zero ocorrencias)."""
+    def test_contexto_do_evento_e_exigido(self):
+        """A pesquisa do Google News nao respeita o AND das aspas, por isso o
+        ambito tem de ser imposto aqui: cada item precisa de um termo do evento
+        e de um termo de venda."""
         alvo = self.alvo_noticias()
-        self.assertNotEqual(alvo["match"], "noruega")
-        self.assertIn("bilhet", alvo["match"])
+        contexto = [cb.sem_acentos(t) for t in alvo["sinais_contexto"]]
+        self.assertIn("noruega", contexto)
+        self.assertIn("dragao", contexto)
 
     def test_bilheteira_continua_essencial(self):
         alvos = cb.resolver_alvos(CONFIG)
@@ -540,6 +540,74 @@ class TestTitulosDeDiagnostico(unittest.TestCase):
             f"<item><title>Notícia {i}</title></item>" for i in range(20)
         ) + "</channel></rss>"
         self.assertEqual(len(cb.titulos_do_feed(feed, maximo=5)), 5)
+
+
+class TestExigenciaDupla(unittest.TestCase):
+    """Um item so conta com termo do evento E termo de venda. Estes titulos sao
+    os que o Google News devolveu de facto numa corrida real, para uma pesquisa
+    por Portugal e Noruega -- e que produziram um falso positivo."""
+
+    TITULOS_REAIS = [
+        "Famalicão: Venda de bilhetes para o jogo FC Famalicão-Gil Vicente - SAPO",
+        "MEGADETH actuam em Portugal em Abril de 2027 - loudmagazine.net",
+        "Millennium Estoril Open 2026: tudo sobre os jogadores, bilhetes, horários e acessos - RFM",
+        "FC Porto Inicia Venda de Bilhetes para a Supertaça Cândido de Oliveira - superportistas.pt",
+        "Como conseguir ingressos para a Copa do Mundo da FIFA de 2026 - CNN",
+    ]
+    TITULO_VERDADEIRO = (
+        "Bilhetes para o Portugal-Noruega no Dragão à venda a partir de segunda-feira"
+    )
+
+    def alvo(self):
+        return [a for a in cb.resolver_alvos(CONFIG) if not a["essencial"]][0]
+
+    def feed(self, titulos):
+        itens = "".join(f"<item><title>{t}</title></item>" for t in titulos)
+        return f"<rss><channel><title>pesquisa</title>{itens}</channel></rss>"
+
+    def test_noticias_de_bilhetes_de_outros_jogos_nao_alertam(self):
+        r = cb.analisar("feed://x", self.feed(self.TITULOS_REAIS), self.alvo(), None)
+        self.assertEqual(r["estado"], cb.SEM_SINAL)
+        self.assertEqual(r["acertos"], [])
+
+    def test_a_noticia_certa_alerta_mesmo_no_meio_do_ruido(self):
+        titulos = [self.TITULO_VERDADEIRO] + self.TITULOS_REAIS
+        r = cb.analisar("feed://x", self.feed(titulos), self.alvo(), None)
+        self.assertEqual(r["estado"], cb.A_VENDA)
+        self.assertEqual(len(r["acertos"]), 1)
+        self.assertIn("Noruega", r["acertos"][0]["titulo"])
+
+    def test_so_contexto_nao_basta(self):
+        r = cb.analisar("feed://x", self.feed([
+            "Portugal defronta a Noruega no Dragão a 4 de outubro",
+        ]), self.alvo(), None)
+        self.assertEqual(r["estado"], cb.SEM_SINAL)
+
+    def test_so_venda_nao_basta(self):
+        r = cb.analisar("feed://x", self.feed([
+            "Venda de bilhetes para o Benfica-Sporting arranca amanhã",
+        ]), self.alvo(), None)
+        self.assertEqual(r["estado"], cb.SEM_SINAL)
+
+    def test_feed_sem_itens(self):
+        r = cb.analisar("feed://x", self.feed([]), self.alvo(), None)
+        self.assertEqual(r["estado"], cb.NAO_LISTADO)
+        self.assertEqual(r["itens"], 0)
+
+    def test_acerto_identifica_os_dois_lados(self):
+        r = cb.analisar("feed://x", self.feed([self.TITULO_VERDADEIRO]), self.alvo(), None)
+        acerto = r["acertos"][0]
+        self.assertTrue(acerto["sinais_evento"])
+        self.assertTrue(acerto["sinais_venda"])
+
+    def test_sem_contexto_exigido_volta_ao_comportamento_simples(self):
+        """Um alvo sem sinais_contexto continua a alertar so com venda."""
+        alvo = dict(self.alvo())
+        alvo["sinais_contexto"] = []
+        r = cb.analisar("feed://x", self.feed([
+            "Venda de bilhetes para o Benfica-Sporting arranca amanhã",
+        ]), alvo, None)
+        self.assertEqual(r["estado"], cb.A_VENDA)
 
 
 if __name__ == "__main__":

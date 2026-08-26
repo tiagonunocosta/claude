@@ -314,14 +314,59 @@ def tem_preco(contexto: str) -> bool:
     return bool(re.search(r"(?:€\s*\d|\d[\d .,]*\s*(?:€|eur\b))", contexto, re.IGNORECASE))
 
 
+def analisar_feed(url: str, documento: str, cfg: dict, estado_anterior: dict | None) -> dict:
+    """Analisa um feed noticia a noticia.
+
+    Um item so conta quando traz **as duas coisas**: um termo do evento
+    (sinais_contexto) e um termo de venda. A pesquisa do Google News nao
+    respeita o AND das aspas -- devolveu "Venda de bilhetes para o
+    Famalicao-Gil Vicente" e "FC Porto inicia venda de bilhetes para a
+    Supertaca" para uma pesquisa por Portugal e Noruega. Sem esta exigencia
+    dupla, qualquer noticia de bilhetes do pais dava alerta.
+    """
+    itens = itens_do_feed(documento)
+    contexto_exigido = cfg.get("sinais_contexto") or []
+
+    acertos: list[dict] = []
+    for item in itens:
+        texto_item = html_para_texto(item)
+        venda = encontrar_sinais(texto_item, cfg["sinais_venda"])
+        if not venda:
+            continue
+        evento = encontrar_sinais(texto_item, contexto_exigido) if contexto_exigido else []
+        if contexto_exigido and not evento:
+            continue
+        acertos.append({
+            "titulo": (titulos_do_feed(item, maximo=1) or ["(sem titulo)"])[0],
+            "sinais_venda": venda,
+            "sinais_evento": evento,
+        })
+
+    resultado: dict = {
+        "url": url,
+        "formato": "feed",
+        "tamanho_html": len(documento),
+        "tamanho_texto": sum(len(html_para_texto(i)) for i in itens),
+        "itens": len(itens),
+        "titulos": titulos_do_feed(documento),
+        "acertos": acertos,
+        "sinais_venda": sorted({s for a in acertos for s in a["sinais_venda"]}),
+        "sinais_bloqueio": [],
+        "preco_visivel": False,
+        "hash": impressao_digital(" ".join(a["titulo"] for a in acertos)),
+        "hash_anterior": (estado_anterior or {}).get("hash"),
+        "extrato": " | ".join(a["titulo"] for a in acertos)[:600],
+    }
+    resultado["estado"] = A_VENDA if acertos else (NAO_LISTADO if not itens else SEM_SINAL)
+    return resultado
+
+
 def analisar(url: str, html: str, cfg: dict, estado_anterior: dict | None) -> dict:
-    feed = e_feed(html)
-    if feed:
-        # So os itens. Um feed sem itens da texto vazio, e isso e um resultado
-        # legitimo ("nao ha noticias"), nao uma falha de leitura.
-        texto = html_para_texto("\n".join(itens_do_feed(html)))
-    else:
-        texto = html_para_texto(html)
+    if e_feed(html):
+        return analisar_feed(url, html, cfg, estado_anterior)
+
+    feed = False
+    texto = html_para_texto(html)
 
     resultado: dict = {
         "url": url,
@@ -343,9 +388,6 @@ def analisar(url: str, html: str, cfg: dict, estado_anterior: dict | None) -> di
         resultado["estado"] = SEM_CONTEUDO
         resultado["extrato"] = texto[:300]
         return resultado
-
-    if feed:
-        resultado["titulos"] = titulos_do_feed(html)
 
     janelas = recortar_janelas(texto, cfg["match"], cfg["janela"])
     if not janelas:

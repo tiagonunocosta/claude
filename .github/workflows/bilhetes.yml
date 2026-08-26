@@ -120,8 +120,12 @@ jobs:
               if (r.erro) linhas.push(`  - erro: ${r.erro}`);
               // Os titulos dizem se o feed trouxe noticias e o match falhou,
               // ou se simplesmente nao ha noticias.
+              if (r.acertos?.length) {
+                linhas.push('  - **noticias que casam com o evento E com venda:**');
+                r.acertos.forEach(a => linhas.push(`    - ${a.titulo.slice(0, 160)}`));
+              }
               if (r.titulos?.length) {
-                linhas.push('  - noticias no feed:');
+                linhas.push(`  - ${r.itens} noticias no feed (as primeiras):`);
                 r.titulos.forEach(t => linhas.push(`    - ${t.slice(0, 140)}`));
               } else if (r.formato === 'feed') {
                 linhas.push('  - o feed nao trouxe noticias nenhumas');
