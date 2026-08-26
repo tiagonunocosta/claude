@@ -1,0 +1,4 @@
+.cache/
+relatorio.json
+__pycache__/
+*.pyc

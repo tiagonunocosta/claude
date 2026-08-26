@@ -1,0 +1,186 @@
+name: Bilhetes Portugal-Noruega
+
+# Verifica a bilheteira oficial da FPF e abre (ou comenta) um issue quando os
+# bilhetes parecem estar a venda. O issue faz o GitHub enviar-te email.
+#
+# Nota: o GitHub desativa workflows agendados em repositorios sem atividade
+# durante 60 dias. Como o jogo e a 4 de outubro de 2026 e isto arranca em
+# agosto, nao chega la -- mas se o repo ficar parado, reativa em Actions.
+
+on:
+  schedule:
+    # 07:00, 12:00 e 18:00 UTC -> 08:00, 13:00 e 19:00 em Lisboa (WEST).
+    - cron: "0 7,12,18 * * *"
+  workflow_dispatch:
+    inputs:
+      forcar_alerta:
+        description: "Abrir issue mesmo sem alerta (para testar a notificacao)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: bilhetes
+  cancel-in-progress: false
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # O estado guarda a impressao digital da pagina entre corridas, para
+      # detetar mudancas que os sinais de texto nao reconhecam.
+      - name: Restaurar estado da corrida anterior
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          key: bilhetes-estado-${{ github.run_id }}
+          restore-keys: |
+            bilhetes-estado-
+
+      - name: Verificar bilheteira
+        id: verificar
+        run: |
+          set +e
+          python3 scripts/check_bilhetes.py --json > relatorio.json
+          codigo=$?
+          set -e
+          # Se o script morreu antes de escrever o relatorio, deixamos um
+          # relatorio minimo para os passos seguintes nao falharem tambem.
+          if ! python3 -c 'import json,sys; json.load(open("relatorio.json"))' 2>/dev/null; then
+            printf '{"estado":"ERRO","explicacao":"o script nao produziu relatorio","evento":"?","verificado_em":"?","alerta":false,"resultados":[]}' > relatorio.json
+            codigo=1
+          fi
+          estado=$(python3 -c 'import json;print(json.load(open("relatorio.json"))["estado"])')
+          echo "codigo=$codigo" >> "$GITHUB_OUTPUT"
+          echo "estado=$estado" >> "$GITHUB_OUTPUT"
+          cat relatorio.json
+
+      - name: Resumo
+        if: always()
+        run: |
+          {
+            echo "### Verificacao da bilheteira"
+            echo
+            echo "- **Estado:** \`${{ steps.verificar.outputs.estado }}\`"
+            echo "- **Codigo de saida:** \`${{ steps.verificar.outputs.codigo }}\`"
+            echo
+            echo '```json'
+            cat relatorio.json 2>/dev/null || echo '{}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: relatorio-${{ github.run_id }}
+          path: relatorio.json
+          retention-days: 30
+
+      - name: Avisar (abrir ou comentar issue)
+        if: steps.verificar.outputs.codigo == '10' || steps.verificar.outputs.codigo == '2' || inputs.forcar_alerta
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const rel = JSON.parse(fs.readFileSync('relatorio.json', 'utf8'));
+            const codigo = '${{ steps.verificar.outputs.codigo }}';
+
+            const eProblema = codigo === '2';
+            const titulo = eProblema
+              ? 'Monitor de bilhetes precisa de ajuste'
+              : 'Bilhetes Portugal-Noruega (04/10/2026)';
+            const etiqueta = eProblema ? 'bilhetes-config' : 'bilhetes';
+            const marcador = `<!-- bilhetes-monitor estado=${rel.estado} -->`;
+
+            const corpoDetalhe = rel.resultados.map(r => {
+              const linhas = [`- **${r.url}** -- \`${r.estado}\``];
+              if (r.sinais_venda?.length) linhas.push(`  - sinais de venda: ${r.sinais_venda.join(', ')}`);
+              if (r.sinais_bloqueio?.length) linhas.push(`  - sinais de bloqueio: ${r.sinais_bloqueio.join(', ')}`);
+              if (r.preco_visivel) linhas.push('  - preco visivel na pagina');
+              if (r.erro) linhas.push(`  - erro: ${r.erro}`);
+              if (r.extrato) linhas.push(`  - extrato: \`${r.extrato.slice(0, 300).replace(/`/g, "'")}\``);
+              return linhas.join('\n');
+            }).join('\n');
+
+            const cabecalho = eProblema
+              ? [
+                  'A verificacao automatica **nao esta a conseguir ler a pagina** da bilheteira',
+                  '(provavelmente conteudo carregado por JavaScript). Enquanto isto nao for',
+                  'resolvido, o monitor nao deteta a abertura da venda -- nao confies nele.',
+                  '',
+                  'Para investigar: `python3 scripts/check_bilhetes.py --guardar-html /tmp/paginas`',
+                  'e ver o HTML que sai de la.',
+                ].join('\n')
+              : [
+                  `**${rel.explicacao}**`,
+                  '',
+                  'Confirma em https://bilheteira.fpf.pt/ e compra so em dominios `.fpf.pt`.',
+                  'Se es socio Portugal+, usa o codigo promocional do email antes de finalizar.',
+                ].join('\n');
+
+            const corpo = [
+              cabecalho,
+              '',
+              `**Evento:** ${rel.evento}`,
+              `**Estado:** \`${rel.estado}\``,
+              `**Verificado em:** ${rel.verificado_em}`,
+              '',
+              '### Detalhe por pagina',
+              corpoDetalhe,
+              '',
+              `[Corrida do workflow](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+              '',
+              marcador,
+            ].join('\n');
+
+            const abertos = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: etiqueta,
+            });
+
+            if (abertos.data.length === 0) {
+              const criado = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: titulo,
+                body: corpo,
+                labels: [etiqueta],
+              });
+              core.notice(`Issue #${criado.data.number} criado (estado ${rel.estado}).`);
+              return;
+            }
+
+            // Ja existe um issue aberto: comentar so quando o estado muda, para
+            // nao encher a caixa de correio a cada corrida.
+            const issue = abertos.data[0];
+            const comentarios = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              per_page: 100,
+            });
+            const textos = [issue.body || '', ...comentarios.data.map(c => c.body || '')];
+            const ultimoEstado = textos
+              .map(t => t.match(/<!-- bilhetes-monitor estado=(\w+) -->/)?.[1])
+              .filter(Boolean)
+              .pop();
+
+            if (ultimoEstado === rel.estado) {
+              core.notice(`Issue #${issue.number} ja reporta o estado ${rel.estado}; sem novo comentario.`);
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              body: corpo,
+            });
+            core.notice(`Comentario adicionado ao issue #${issue.number} (${ultimoEstado} -> ${rel.estado}).`);

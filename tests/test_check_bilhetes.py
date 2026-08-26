@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+"""Testes do verificador de bilhetes.
+
+Correm sem rede e sem dependencias:  python3 -m unittest discover -s tests -v
+"""
+
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+RAIZ = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(RAIZ / "scripts"))
+
+import check_bilhetes as cb  # noqa: E402
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+CONFIG = json.loads((RAIZ / "config" / "bilhetes.json").read_text(encoding="utf-8"))
+
+
+def analisar(nome, estado_anterior=None, cfg=None):
+    html = (FIXTURES / nome).read_text(encoding="utf-8")
+    return cb.analisar(f"fixture://{nome}", html, cfg or CONFIG, estado_anterior)
+
+
+class TestEstados(unittest.TestCase):
+    def test_evento_ausente_da_pagina(self):
+        r = analisar("nao_listado.html")
+        self.assertEqual(r["estado"], cb.NAO_LISTADO)
+
+    def test_outro_jogo_a_venda_nao_conta(self):
+        """A pagina tem 'Comprar bilhetes' para os Sub-21, mas nao para a Noruega."""
+        r = analisar("nao_listado.html")
+        self.assertEqual(r["sinais_venda"], [])
+
+    def test_em_breve_e_bloqueio(self):
+        r = analisar("em_breve.html")
+        self.assertEqual(r["estado"], cb.BLOQUEADO)
+        self.assertIn("em breve", r["sinais_bloqueio"])
+
+    def test_a_venda(self):
+        r = analisar("a_venda.html")
+        self.assertEqual(r["estado"], cb.A_VENDA)
+        self.assertIn("comprar", r["sinais_venda"])
+        self.assertTrue(r["preco_visivel"])
+
+    def test_esgotado_ganha_ao_botao_comprar(self):
+        """O caso que mais provoca falsos alertas: botao visivel mas desativado."""
+        r = analisar("esgotado.html")
+        self.assertEqual(r["estado"], cb.BLOQUEADO)
+        self.assertIn("esgotado", r["sinais_bloqueio"])
+        self.assertIn("comprar", r["sinais_venda"])
+
+    def test_pagina_javascript_e_sinalizada(self):
+        r = analisar("shell_javascript.html")
+        self.assertEqual(r["estado"], cb.SEM_CONTEUDO)
+
+    def test_listado_sem_sinais(self):
+        r = analisar("venda_sem_palavras_conhecidas.html")
+        self.assertEqual(r["estado"], cb.SEM_SINAL)
+        self.assertIn("primeira observacao", r["nota"])
+
+
+class TestDetecaoDeMudanca(unittest.TestCase):
+    def test_primeira_observacao_nao_alerta(self):
+        r = analisar("venda_sem_palavras_conhecidas.html", estado_anterior=None)
+        self.assertEqual(r["estado"], cb.SEM_SINAL)
+
+    def test_contexto_igual_nao_alerta(self):
+        primeiro = analisar("venda_sem_palavras_conhecidas.html")
+        segundo = analisar(
+            "venda_sem_palavras_conhecidas.html",
+            estado_anterior={"hash": primeiro["hash"]},
+        )
+        self.assertEqual(segundo["estado"], cb.SEM_SINAL)
+
+    def test_contexto_diferente_alerta(self):
+        base = analisar("em_breve.html")
+        depois = analisar(
+            "venda_sem_palavras_conhecidas.html",
+            estado_anterior={"hash": base["hash"]},
+        )
+        self.assertEqual(depois["estado"], cb.ALTEROU)
+
+    def test_numeros_nao_disparam_alerta(self):
+        """Um contador de lugares nao deve contar como mudanca de conteudo."""
+        a = cb.impressao_digital("Portugal - Noruega. Restam 1.842 bilhetes.")
+        b = cb.impressao_digital("Portugal - Noruega. Restam 1.203 bilhetes.")
+        self.assertEqual(a, b)
+
+    def test_palavras_novas_disparam_alerta(self):
+        a = cb.impressao_digital("Portugal - Noruega. Em breve.")
+        b = cb.impressao_digital("Portugal - Noruega. Comprar bilhetes.")
+        self.assertNotEqual(a, b)
+
+
+class TestExtracaoDeTexto(unittest.TestCase):
+    def test_script_e_descartado(self):
+        texto = cb.html_para_texto("<p>ola</p><script>var esgotado = true;</script>")
+        self.assertNotIn("esgotado", texto)
+        self.assertIn("ola", texto)
+
+    def test_rotulo_em_atributo_e_apanhado(self):
+        texto = cb.html_para_texto('<a title="Comprar bilhetes" href="#"></a>')
+        self.assertIn("Comprar bilhetes", texto)
+
+    def test_acentos_ignorados_na_comparacao(self):
+        self.assertEqual(cb.sem_acentos("Indisponível"), "indisponivel")
+
+    def test_entidades_html_descodificadas(self):
+        self.assertIn("€", cb.html_para_texto("<p>25,00 &euro;</p>"))
+
+    def test_html_malformado_nao_rebenta(self):
+        texto = cb.html_para_texto("<p>Noruega <div><span>4 de outubro")
+        self.assertIn("Noruega", texto)
+
+
+class TestPreco(unittest.TestCase):
+    def test_formatos_de_preco(self):
+        for amostra in ("25,00 €", "€ 25", "desde 70 EUR", "1.250,00€"):
+            with self.subTest(amostra=amostra):
+                self.assertTrue(cb.tem_preco(amostra))
+
+    def test_texto_sem_preco(self):
+        self.assertFalse(cb.tem_preco("Portugal - Noruega, 4 de outubro de 2026"))
+
+
+class TestJanela(unittest.TestCase):
+    def test_janela_isola_o_evento(self):
+        texto = "A" * 5000 + " Noruega " + "B" * 5000 + " Comprar bilhetes"
+        janelas = cb.recortar_janelas(texto, "noruega", 100)
+        self.assertEqual(len(janelas), 1)
+        self.assertNotIn("Comprar", janelas[0])
+
+    def test_varias_ocorrencias(self):
+        janelas = cb.recortar_janelas("noruega x noruega", "noruega", 5)
+        self.assertEqual(len(janelas), 2)
+
+
+class TestCLI(unittest.TestCase):
+    def test_codigo_de_saida_alerta(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            codigo = cb.main([
+                "--fixture", str(FIXTURES / "a_venda.html"),
+                "--estado", str(Path(tmp) / "estado.json"),
+                "--json",
+            ])
+            self.assertEqual(codigo, 10)
+
+    def test_codigo_de_saida_silencio(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            codigo = cb.main([
+                "--fixture", str(FIXTURES / "em_breve.html"),
+                "--estado", str(Path(tmp) / "estado.json"),
+                "--json",
+            ])
+            self.assertEqual(codigo, 0)
+
+    def test_codigo_de_saida_pagina_javascript(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            codigo = cb.main([
+                "--fixture", str(FIXTURES / "shell_javascript.html"),
+                "--estado", str(Path(tmp) / "estado.json"),
+            ])
+            self.assertEqual(codigo, 2)
+
+    def test_estado_persiste_entre_corridas(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            estado = Path(tmp) / "estado.json"
+            cb.main(["--fixture", str(FIXTURES / "em_breve.html"), "--estado", str(estado)])
+            self.assertTrue(estado.exists())
+            gravado = json.loads(estado.read_text(encoding="utf-8"))
+            chave = f"{FIXTURES / 'em_breve.html'}"
+            self.assertIn(chave, gravado)
+            self.assertEqual(gravado[chave]["estado"], cb.BLOQUEADO)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

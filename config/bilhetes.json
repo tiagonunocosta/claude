@@ -1,0 +1,40 @@
+{
+  "evento": "Portugal – Noruega, 4 de outubro de 2026, 19h45, Estádio do Dragão (Liga das Nações 2026/27)",
+  "match": "noruega",
+  "janela": 600,
+  "min_texto": 400,
+  "urls": [
+    "https://bilheteira.fpf.pt/"
+  ],
+  "sinais_venda": [
+    "comprar",
+    "adquirir",
+    "compra de bilhetes",
+    "bilhetes disponiveis",
+    "bilhetes disponíveis",
+    "escolher lugar",
+    "selecionar lugar",
+    "escolher bancada",
+    "adicionar ao carrinho",
+    "buy tickets",
+    "add to cart"
+  ],
+  "sinais_bloqueio": [
+    "esgotado",
+    "esgotados",
+    "sold out",
+    "em breve",
+    "brevemente",
+    "proximamente",
+    "indisponivel",
+    "indisponível",
+    "nao disponivel",
+    "não disponível",
+    "venda encerrada",
+    "venda nao iniciada",
+    "venda não iniciada",
+    "sem bilhetes disponiveis",
+    "sem bilhetes disponíveis",
+    "coming soon"
+  ]
+}
