@@ -119,6 +119,11 @@ jobs:
             }).join('\n');
 
             const porJavaScript = rel.resultados.some(r => r.estado === 'SEM_CONTEUDO');
+            // Cegueira na bilheteira nao e cegueira total: se o feed de
+            // noticias leu bem, ha ainda um canal vivo e o issue tem de o
+            // dizer -- senao "monitor cego" le-se como "nada funciona".
+            const noticiasVivas = rel.resultados.some(
+              r => r.essencial === false && !['ERRO', 'SEM_CONTEUDO'].includes(r.estado));
             const causa = porJavaScript
               ? 'a pagina responde mas nao traz texto analisavel (conteudo carregado por JavaScript)'
               : `falharam ${rel.falhas_consecutivas} leituras seguidas (provavelmente a protecao anti-bot da Cloudflare a recusar o IP do runner)`;
@@ -146,6 +151,10 @@ jobs:
                   porJavaScript
                     ? 'Se o HTML guardado vier vazio, a correcao e apontar `--url` ao endpoint JSON que a pagina consome.'
                     : 'Se localmente funcionar, o problema e o IP do runner: passa o agendamento para cron local.',
+                  '',
+                  noticiasVivas
+                    ? '> **O canal de noticias continua a funcionar.** Se a FPF anunciar a data de abertura na imprensa, este monitor ainda te avisa. O que se perdeu foi a leitura direta da bilheteira.'
+                    : '> Nenhum canal esta a ler. Neste momento o monitor nao te avisa de nada.',
                 ].join('\n')
               : [
                   `**${rel.explicacao}**`,

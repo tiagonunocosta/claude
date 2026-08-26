@@ -6,6 +6,7 @@ Correm sem rede e sem dependencias:  python3 -m unittest discover -s tests -v
 
 import json
 import sys
+import urllib.error
 import tempfile
 import unittest
 from pathlib import Path
@@ -387,6 +388,59 @@ class TestNotificacao(unittest.TestCase):
                 ["--fixture", str(FIXTURES / "a_venda.html")], Path(tmp) / "e.json"
             )
             self.assertEqual(codigo, 10)
+
+
+class TestPerfisDeCabecalhos(unittest.TestCase):
+    """A bilheteira devolveu 403 ao runner do GitHub. O segundo perfil de
+    cabecalhos e a tentativa barata de passar; estes testes fixam quando ela
+    acontece e quando nao vale a pena."""
+
+    def setUp(self):
+        self.tentativas = []
+        self._original = cb._buscar_com
+
+    def tearDown(self):
+        cb._buscar_com = self._original
+
+    def _finge(self, respostas):
+        """respostas: lista de None (sucesso) ou codigo HTTP a levantar."""
+        def falso(url, timeout, cabecalhos):
+            self.tentativas.append(cabecalhos.get("Accept", "?"))
+            resultado = respostas[len(self.tentativas) - 1]
+            if resultado is not None:
+                raise urllib.error.HTTPError(url, resultado, "bloqueado", {}, None)
+            return "<html><p>ok</p></html>"
+        cb._buscar_com = falso
+
+    def test_primeiro_perfil_basta(self):
+        self._finge([None])
+        cb.buscar("https://exemplo.pt/", 5)
+        self.assertEqual(len(self.tentativas), 1)
+
+    def test_403_faz_tentar_o_segundo_perfil(self):
+        self._finge([403, None])
+        cb.buscar("https://exemplo.pt/", 5)
+        self.assertEqual(len(self.tentativas), 2)
+        self.assertNotEqual(self.tentativas[0], self.tentativas[1])
+
+    def test_403_nos_dois_perfis_propaga_o_erro(self):
+        self._finge([403, 403])
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            cb.buscar("https://exemplo.pt/", 5)
+        self.assertEqual(ctx.exception.code, 403)
+        self.assertEqual(len(self.tentativas), 2)
+
+    def test_404_nao_se_retenta(self):
+        """Cabecalhos diferentes nao fazem aparecer uma pagina que nao existe."""
+        self._finge([404])
+        with self.assertRaises(urllib.error.HTTPError):
+            cb.buscar("https://exemplo.pt/", 5)
+        self.assertEqual(len(self.tentativas), 1)
+
+    def test_sem_accept_encoding(self):
+        """Pedir gzip sem descomprimir traria lixo binario para a analise."""
+        for perfil in cb.PERFIS_CABECALHOS:
+            self.assertNotIn("Accept-Encoding", perfil)
 
 
 if __name__ == "__main__":

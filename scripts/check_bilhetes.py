@@ -57,6 +57,39 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
 
+# Dois perfis de cabecalhos. O primeiro imita uma navegacao normal de browser
+# (os Sec-Fetch-* fazem parte do que um Chrome real envia, e a ausencia deles e
+# um sinal barato para um WAF). O segundo e minimalista, para o caso de ser a
+# abundancia de cabecalhos a levantar suspeita.
+#
+# Nao pedimos Accept-Encoding: o urllib nao descomprime, e um gzip por
+# descomprimir chegava aqui como lixo binario.
+PERFIS_CABECALHOS = (
+    {
+        "User-Agent": USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "pt-PT,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Sec-CH-UA": '"Chromium";v="126", "Not:A-Brand";v="24"',
+        "Sec-CH-UA-Mobile": "?0",
+        "Sec-CH-UA-Platform": '"macOS"',
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    },
+    {
+        "User-Agent": USER_AGENT,
+        "Accept": "*/*",
+    },
+)
+
+# Codigos onde vale a pena tentar o segundo perfil. Um 404 ou um 500 nao muda
+# com cabecalhos diferentes; um 403/406/429/503 pode ser deteccao de bot.
+CODIGOS_A_RETENTAR = frozenset({403, 406, 429, 503})
+
 A_VENDA = "A_VENDA"
 ALTEROU = "ALTEROU"
 BLOQUEADO = "BLOQUEADO"
@@ -170,20 +203,33 @@ def sem_acentos(texto: str) -> str:
 # Rede
 # --------------------------------------------------------------------------- #
 
-def buscar(url: str, timeout: float) -> str:
-    pedido = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": USER_AGENT,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "pt-PT,pt;q=0.9,en;q=0.8",
-            "Cache-Control": "no-cache",
-        },
-    )
+def _buscar_com(url: str, timeout: float, cabecalhos: dict) -> str:
+    pedido = urllib.request.Request(url, headers=cabecalhos)
     with urllib.request.urlopen(pedido, timeout=timeout) as resposta:
         bruto = resposta.read()
         codificacao = resposta.headers.get_content_charset() or "utf-8"
     return bruto.decode(codificacao, errors="replace")
+
+
+def buscar(url: str, timeout: float) -> str:
+    """Tenta cada perfil de cabecalhos ate um passar.
+
+    Nao ha aqui nenhuma tentativa de contornar uma protecao a serio: se o
+    servidor devolve um desafio, devolve 403 e o script reporta-o. Isto so
+    cobre o caso banal de um WAF a recusar um cliente que nao se parece com
+    browser nenhum.
+    """
+    ultimo_erro: Exception | None = None
+    for indice, cabecalhos in enumerate(PERFIS_CABECALHOS):
+        try:
+            return _buscar_com(url, timeout, cabecalhos)
+        except urllib.error.HTTPError as exc:
+            ultimo_erro = exc
+            if exc.code not in CODIGOS_A_RETENTAR or indice == len(PERFIS_CABECALHOS) - 1:
+                raise
+        except (urllib.error.URLError, OSError, ValueError):
+            raise
+    raise ultimo_erro if ultimo_erro else RuntimeError("nenhum perfil de cabecalhos tentado")
 
 
 # --------------------------------------------------------------------------- #
