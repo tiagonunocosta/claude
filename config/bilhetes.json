@@ -3,9 +3,6 @@
   "match": "noruega",
   "janela": 600,
   "min_texto": 400,
-  "urls": [
-    "https://bilheteira.fpf.pt/"
-  ],
   "sinais_venda": [
     "comprar",
     "adquirir",
@@ -36,5 +33,38 @@
     "sem bilhetes disponiveis",
     "sem bilhetes disponíveis",
     "coming soon"
+  ],
+  "alvos": [
+    {
+      "nome": "bilheteira oficial FPF",
+      "url": "https://bilheteira.fpf.pt/",
+      "essencial": true
+    },
+    {
+      "nome": "notícias (Google News)",
+      "url": "https://news.google.com/rss/search?q=bilhetes%20%22Portugal%22%20%22Noruega%22%20when%3A45d&hl=pt-PT&gl=PT&ceid=PT:pt",
+      "essencial": false,
+      "detetar_mudanca": false,
+      "janela": 250,
+      "min_texto": 40,
+      "sinais_bloqueio": [],
+      "sinais_venda": [
+        "a venda",
+        "à venda",
+        "venda de bilhetes",
+        "venda dos bilhetes",
+        "inicio da venda",
+        "início da venda",
+        "venda arranca",
+        "arranca a venda",
+        "bilhetes disponiveis",
+        "bilhetes disponíveis",
+        "pre-venda",
+        "pré-venda",
+        "ja pode comprar",
+        "já pode comprar",
+        "bilhetes para o portugal"
+      ]
+    }
   ]
 }

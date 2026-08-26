@@ -58,11 +58,35 @@ No `crontab -e`, três vezes por dia:
 
 Só precisa de Python 3.9+. **Sem dependências** — apenas a biblioteca padrão.
 
+## Dois alvos
+
+| Alvo | O que é | Essencial |
+|---|---|---|
+| **bilheteira oficial** | `bilheteira.fpf.pt` — a verdade, mas atrás da Cloudflare | sim |
+| **notícias** | feed RSS do Google News, filtrado por *bilhetes + Portugal + Noruega* | não |
+
+O feed de notícias não é decoração: a FPF **anuncia a data de abertura antes de
+a venda abrir**, e a imprensa noticia-o. Na prática o feed tende a avisar
+primeiro. É também o alvo mais robusto — RSS é XML puro, sem JavaScript e sem
+proteção anti-bot, exatamente onde a bilheteira é mais frágil.
+
+Corre no mesmo motor, com três diferenças declaradas na config:
+
+- `sinais_bloqueio: []` — numa notícia "em breve" é informação, não é estado da
+  bilheteira, e não deve calar um alerta.
+- `detetar_mudanca: false` — um feed muda todos os dias; alertar por isso seria
+  ruído diário.
+- `essencial: false` — um feed em baixo é uma pena, não é cegueira, e não deve
+  disparar o interruptor de homem morto.
+
+Para verificar só a bilheteira: `--so-bilheteira`.
+
 ## Como decide
 
-1. Descarrega cada URL de [`config/bilhetes.json`](config/bilhetes.json) e reduz o
-   HTML a texto (descartando `script`/`style`, mas apanhando rótulos em `title`,
-   `alt` e `aria-label`, onde vive o texto dos botões).
+1. Descarrega cada alvo de [`config/bilhetes.json`](config/bilhetes.json) e reduz
+   o HTML/XML a texto (descartando `script`/`style`, mas apanhando rótulos em
+   `title`, `alt` e `aria-label`, onde vive o texto dos botões, e separando as
+   tags de RSS para que dois títulos de notícias não se colem).
 2. Procura o nome do evento (`"match": "noruega"`) e recorta ±600 caracteres em
    volta. Só dentro dessa janela procura sinais — assim um "Comprar bilhetes"
    de *outro* jogo na mesma página não dispara um falso alerta.
@@ -135,12 +159,26 @@ interruptor de homem morto, acima). Mas vale mais descobrir agora:
 python3 -m unittest discover -s tests -v
 ```
 
-31 testes, sem rede: cobrem cada estado, a precedência do bloqueio sobre o botão
-de compra, a deteção de mudança, a extração de texto, os códigos de saída e a
-escalada do interruptor de homem morto.
+40 testes, sem rede: cobrem cada estado, a precedência do bloqueio sobre o botão
+de compra, a deteção de mudança, a extração de texto e de RSS, os códigos de
+saída, a escalada do interruptor de homem morto e a herança de opções por alvo.
 
 ## Ajustar sem tocar no código
 
-Tudo o que importa está em [`config/bilhetes.json`](config/bilhetes.json):
-`urls` (acrescenta o URL direto do evento quando existir), `match`, `janela`,
-`sinais_venda` e `sinais_bloqueio`.
+Tudo o que importa está em [`config/bilhetes.json`](config/bilhetes.json). As
+opções de topo (`match`, `janela`, `min_texto`, `sinais_venda`,
+`sinais_bloqueio`) são herdadas por cada entrada de `alvos`, que redefine só o
+que precisa. Para acrescentar um alvo — o URL direto do evento quando existir,
+ou outro feed de notícias — basta mais uma entrada:
+
+```json
+{
+  "nome": "notícias (outra pesquisa)",
+  "url": "https://news.google.com/rss/search?q=FPF+bilhetes+sele%C3%A7%C3%A3o&hl=pt-PT&gl=PT&ceid=PT:pt",
+  "essencial": false,
+  "detetar_mudanca": false,
+  "janela": 250,
+  "min_texto": 40,
+  "sinais_bloqueio": []
+}
+```

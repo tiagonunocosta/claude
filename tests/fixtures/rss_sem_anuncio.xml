@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+<title>bilhetes "Portugal" "Noruega" - Google Notícias</title>
+<link>https://news.google.com/search</link>
+<language>pt-PT</language>
+<item>
+  <title>Liga das Nações: Portugal defronta Noruega no Estádio do Dragão a 4 de outubro</title>
+  <link>https://exemplo.pt/noticia/1</link>
+  <pubDate>Mon, 24 Aug 2026 10:00:00 GMT</pubDate>
+  <description>A Federação confirmou o Estádio do Dragão como palco do encontro da quarta jornada.</description>
+  <source url="https://exemplo.pt">Exemplo Desporto</source>
+</item>
+<item>
+  <title>Haaland aponta ao apuramento com a Noruega</title>
+  <link>https://exemplo.pt/noticia/2</link>
+  <pubDate>Sun, 23 Aug 2026 08:30:00 GMT</pubDate>
+  <description>O avançado falou aos jornalistas em Oslo sobre o grupo da Noruega.</description>
+  <source url="https://exemplo.pt">Exemplo Desporto</source>
+</item>
+</channel></rss>

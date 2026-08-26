@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+<title>bilhetes "Portugal" "Noruega" - Google Notícias</title>
+<link>https://news.google.com/search</link>
+<language>pt-PT</language>
+<item>
+  <title>Bilhetes para o Portugal-Noruega no Dragão à venda a partir de segunda-feira</title>
+  <link>https://exemplo.pt/noticia/3</link>
+  <pubDate>Fri, 11 Sep 2026 09:00:00 GMT</pubDate>
+  <description>A FPF anunciou o início da venda de bilhetes para o jogo da Liga das Nações, com pré-venda para sócios Portugal+.</description>
+  <source url="https://exemplo.pt">Exemplo Desporto</source>
+</item>
+<item>
+  <title>Haaland aponta ao apuramento com a Noruega</title>
+  <link>https://exemplo.pt/noticia/2</link>
+  <pubDate>Sun, 23 Aug 2026 08:30:00 GMT</pubDate>
+  <description>O avançado falou aos jornalistas em Oslo.</description>
+  <source url="https://exemplo.pt">Exemplo Desporto</source>
+</item>
+</channel></rss>

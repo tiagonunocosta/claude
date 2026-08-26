@@ -7,7 +7,8 @@ instalar nada: cron local, launchd, ou um runner do GitHub Actions.
 
 Como funciona, em tres passos:
 
-1. Descarrega cada URL configurado e reduz o HTML a texto simples.
+1. Descarrega cada alvo configurado (a bilheteira oficial, e feeds RSS de
+   noticias) e reduz o HTML/XML a texto simples.
 2. Procura o nome do evento (por omissao "noruega") e recorta uma janela de
    texto em volta de cada ocorrencia -- e nessa janela, e so nessa, que procura
    sinais de venda ("comprar", "escolher lugar", ...) e sinais de bloqueio
@@ -99,9 +100,14 @@ class ExtratorTexto(HTMLParser):
 
     IGNORAR = {"script", "style", "noscript", "template", "svg", "head"}
     BLOCO = {
+        # HTML
         "p", "div", "li", "tr", "td", "th", "br", "section", "article", "header",
         "footer", "nav", "h1", "h2", "h3", "h4", "h5", "h6", "button", "a",
         "option", "label", "span", "table", "ul", "ol",
+        # RSS/Atom: sem estes separadores, dois titulos de noticias seguidos
+        # colavam-se e criavam vizinhancas que nao existem.
+        "item", "entry", "title", "description", "summary", "content",
+        "link", "pubdate", "updated", "source", "guid", "channel", "feed",
     }
     ATRIBUTOS_UTEIS = {"alt", "title", "aria-label", "value"}
 
@@ -260,9 +266,16 @@ def analisar(url: str, html: str, cfg: dict, estado_anterior: dict | None) -> di
         resultado["estado"] = BLOQUEADO
     elif resultado["sinais_venda"]:
         resultado["estado"] = A_VENDA
-    elif resultado["hash_anterior"] and resultado["hash"] != resultado["hash_anterior"]:
+    elif (
+        cfg.get("detetar_mudanca", True)
+        and resultado["hash_anterior"]
+        and resultado["hash"] != resultado["hash_anterior"]
+    ):
         # Contexto novo sem nenhuma palavra reconhecida: pode ser a venda a
         # abrir com uma formulacao que nao previmos. Vale um aviso.
+        #
+        # Desligado nos feeds de noticias (detetar_mudanca: false): esses mudam
+        # todos os dias por natureza, e o aviso perdia todo o significado.
         resultado["estado"] = ALTEROU
     else:
         resultado["estado"] = SEM_SINAL
@@ -323,23 +336,53 @@ def enviar_webhook(url: str, payload: dict) -> None:
 # CLI
 # --------------------------------------------------------------------------- #
 
+CHAVES_HERDADAS = (
+    "match", "janela", "min_texto", "sinais_venda", "sinais_bloqueio",
+    "detetar_mudanca", "essencial",
+)
+
+
+def resolver_alvos(cfg: dict) -> list[dict]:
+    """Junta as opcoes globais com as opcoes de cada alvo.
+
+    Cada alvo herda tudo o que nao redefinir. E assim que um feed de noticias
+    convive com a bilheteira no mesmo motor: muda so os sinais que procura, a
+    janela de contexto, e desliga a deteccao de mudanca.
+    """
+    globais = {chave: cfg[chave] for chave in CHAVES_HERDADAS if chave in cfg}
+    alvos: list[dict] = []
+    for entrada in cfg.get("alvos", []):
+        # Tolera tanto {"url": ...} como uma string solta.
+        alvo = {"url": entrada} if isinstance(entrada, str) else dict(entrada)
+        resolvido = {**globais, **alvo}
+        resolvido.setdefault("nome", resolvido["url"])
+        resolvido.setdefault("detetar_mudanca", True)
+        resolvido.setdefault("essencial", True)
+        alvos.append(resolvido)
+    return alvos
+
+
 def carregar_config(caminho: Path, args: argparse.Namespace) -> dict:
     cfg = json.loads(caminho.read_text(encoding="utf-8"))
     cfg.setdefault("evento", "evento")
     cfg.setdefault("match", "noruega")
     cfg.setdefault("janela", 600)
     cfg.setdefault("min_texto", 400)
-    cfg.setdefault("urls", [])
+    cfg.setdefault("alvos", [])
     cfg.setdefault("sinais_venda", [])
     cfg.setdefault("sinais_bloqueio", [])
     if args.url:
-        cfg["urls"] = args.url
+        # --url substitui a configuracao: um alvo por URL, tudo herdado.
+        cfg["alvos"] = [{"url": u} for u in args.url]
     if args.match:
         cfg["match"] = args.match
     if args.janela:
         cfg["janela"] = args.janela
-    if not cfg["urls"] and not args.fixture:
-        raise SystemExit("erro: nenhum URL configurado (usa --url ou preenche config/bilhetes.json)")
+    if args.so_bilheteira:
+        cfg["alvos"] = [a for a in cfg["alvos"]
+                        if not isinstance(a, dict) or a.get("essencial", True)]
+    if not cfg["alvos"] and not args.fixture:
+        raise SystemExit("erro: nenhum alvo configurado (usa --url ou preenche config/bilhetes.json)")
     return cfg
 
 
@@ -362,6 +405,8 @@ def construir_parser() -> argparse.ArgumentParser:
     p.add_argument("--estado", type=Path, default=ESTADO_OMISSAO, help="ficheiro de estado")
     p.add_argument("--sem-estado", action="store_true", help="nao ler nem gravar estado")
     p.add_argument("--timeout", type=float, default=30.0, help="timeout de rede em segundos")
+    p.add_argument("--so-bilheteira", action="store_true",
+                   help="ignorar os feeds de noticias e verificar so a bilheteira")
     p.add_argument("--limiar-falhas", type=int, default=3, metavar="N",
                    help="apos N leituras falhadas seguidas, tratar como monitor cego (omissao: 3)")
     p.add_argument("--json", action="store_true", help="imprime o relatorio em JSON")
@@ -386,32 +431,47 @@ def main(argv: list[str] | None = None) -> int:
     falhas_anteriores = int(meta.get("falhas_consecutivas", 0) or 0)
     agora = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
-    alvos: list[tuple[str, str | None, str | None]] = []  # (rotulo, html, erro)
     if args.fixture:
-        for caminho in args.fixture:
-            try:
-                alvos.append((str(caminho), caminho.read_text(encoding="utf-8"), None))
-            except OSError as exc:
-                alvos.append((str(caminho), None, str(exc)))
+        alvos = [{**{c: cfg[c] for c in CHAVES_HERDADAS if c in cfg},
+                  "url": str(caminho), "nome": caminho.name,
+                  "detetar_mudanca": True, "essencial": True,
+                  "_ficheiro": caminho}
+                 for caminho in args.fixture]
     else:
-        for url in cfg["urls"]:
+        alvos = resolver_alvos(cfg)
+
+    descarregados: list[tuple[dict, str | None, str | None]] = []
+    for alvo in alvos:
+        ficheiro = alvo.get("_ficheiro")
+        if ficheiro is not None:
             try:
-                html = buscar(url, args.timeout)
-            except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError) as exc:
-                alvos.append((url, None, f"{type(exc).__name__}: {exc}"))
-                continue
-            if args.guardar_html:
-                args.guardar_html.mkdir(parents=True, exist_ok=True)
-                nome = re.sub(r"[^a-zA-Z0-9]+", "_", url).strip("_")[:80] or "pagina"
-                (args.guardar_html / f"{nome}.html").write_text(html, encoding="utf-8")
-            alvos.append((url, html, None))
+                descarregados.append((alvo, ficheiro.read_text(encoding="utf-8"), None))
+            except OSError as exc:
+                descarregados.append((alvo, None, str(exc)))
+            continue
+        try:
+            html = buscar(alvo["url"], args.timeout)
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError) as exc:
+            descarregados.append((alvo, None, f"{type(exc).__name__}: {exc}"))
+            continue
+        if args.guardar_html:
+            args.guardar_html.mkdir(parents=True, exist_ok=True)
+            nome = re.sub(r"[^a-zA-Z0-9]+", "_", alvo["url"]).strip("_")[:80] or "pagina"
+            (args.guardar_html / f"{nome}.html").write_text(html, encoding="utf-8")
+        descarregados.append((alvo, html, None))
 
     resultados: list[dict] = []
-    for rotulo, html, erro in alvos:
+    for alvo, html, erro in descarregados:
+        rotulo = alvo["url"]
         if erro is not None:
-            resultados.append({"url": rotulo, "estado": ERRO, "erro": erro})
+            resultados.append({
+                "url": rotulo, "nome": alvo["nome"], "essencial": alvo["essencial"],
+                "estado": ERRO, "erro": erro,
+            })
             continue
-        resultado = analisar(rotulo, html or "", cfg, estado.get(rotulo))
+        resultado = analisar(rotulo, html or "", alvo, estado.get(rotulo))
+        resultado["nome"] = alvo["nome"]
+        resultado["essencial"] = alvo["essencial"]
         resultados.append(resultado)
         if not args.sem_estado and resultado.get("hash"):
             estado[rotulo] = {
@@ -429,9 +489,17 @@ def main(argv: list[str] | None = None) -> int:
 
     # "Leitura util" = conseguimos mesmo ver a pagina, seja o que for que diga.
     # ERRO e SEM_CONTEUDO nao contam: nesses casos nao sabemos nada.
-    leitura_util = estado_global not in (ERRO, SEM_CONTEUDO)
+    #
+    # Conta so o que e essencial (a bilheteira). Um feed de noticias em baixo e
+    # uma pena, nao e cegueira -- nao vale acordar ninguem por isso.
+    essenciais = [r for r in resultados if r.get("essencial", True)]
+    referencia = essenciais or resultados
+    leitura_util = any(r["estado"] not in (ERRO, SEM_CONTEUDO) for r in referencia)
     falhas = 0 if leitura_util else falhas_anteriores + 1
-    monitor_cego = (estado_global == SEM_CONTEUDO) or (falhas >= args.limiar_falhas)
+    monitor_cego = (
+        any(r["estado"] == SEM_CONTEUDO for r in referencia)
+        or falhas >= args.limiar_falhas
+    )
 
     if not args.sem_estado:
         estado["_meta"] = {
@@ -470,7 +538,8 @@ def main(argv: list[str] | None = None) -> int:
             print("Nota       : sem estado anterior; a deteccao de mudanca so")
             print("             fica ativa a partir da proxima corrida.")
         for r in resultados:
-            print(f"\n  {r['url']}")
+            etiqueta = "" if r.get("essencial", True) else " (noticias)"
+            print(f"\n  {r.get('nome', r['url'])}{etiqueta}")
             print(f"    estado          : {r['estado']}")
             if r.get("erro"):
                 print(f"    erro            : {r['erro']}")
@@ -489,9 +558,10 @@ def main(argv: list[str] | None = None) -> int:
     if alerta:
         titulo = f"Bilhetes: {estado_global}"
         corpo = f"{cfg['evento']}\n{relatorio['explicacao']}\n" + "\n".join(
-            f"- {r['url']}: {r['estado']}" for r in resultados
+            f"- {r.get('nome', r['url'])}: {r['estado']}" for r in resultados
         )
-        primeiro_url = cfg["urls"][0] if cfg["urls"] else "https://bilheteira.fpf.pt/"
+        essencial_url = next((r["url"] for r in resultados if r.get("essencial", True)), None)
+        primeiro_url = essencial_url or "https://bilheteira.fpf.pt/"
         if args.ntfy:
             try:
                 enviar_ntfy(args.ntfy, titulo, corpo, primeiro_url)

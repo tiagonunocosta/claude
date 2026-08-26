@@ -101,7 +101,9 @@ jobs:
             const marcador = `<!-- bilhetes-monitor estado=${rel.estado} -->`;
 
             const corpoDetalhe = rel.resultados.map(r => {
-              const linhas = [`- **${r.url}** -- \`${r.estado}\``];
+              const rotulo = r.nome || r.url;
+              const tipo = r.essencial === false ? ' _(notícias)_' : '';
+              const linhas = [`- **${rotulo}**${tipo} -- \`${r.estado}\``];
               if (r.sinais_venda?.length) linhas.push(`  - sinais de venda: ${r.sinais_venda.join(', ')}`);
               if (r.sinais_bloqueio?.length) linhas.push(`  - sinais de bloqueio: ${r.sinais_bloqueio.join(', ')}`);
               if (r.preco_visivel) linhas.push('  - preco visivel na pagina');
@@ -114,6 +116,11 @@ jobs:
             const causa = porJavaScript
               ? 'a pagina responde mas nao traz texto analisavel (conteudo carregado por JavaScript)'
               : `falharam ${rel.falhas_consecutivas} leituras seguidas (provavelmente a protecao anti-bot da Cloudflare a recusar o IP do runner)`;
+
+            const fonteNoticia = rel.resultados.some(
+              r => r.essencial === false && (r.estado === 'A_VENDA' || r.estado === 'ALTEROU'));
+            const fonteBilheteira = rel.resultados.some(
+              r => r.essencial !== false && (r.estado === 'A_VENDA' || r.estado === 'ALTEROU'));
 
             const cabecalho = eProblema
               ? [
@@ -136,6 +143,12 @@ jobs:
                 ].join('\n')
               : [
                   `**${rel.explicacao}**`,
+                  '',
+                  fonteNoticia && !fonteBilheteira
+                    ? 'O sinal vem das **noticias**, nao da bilheteira -- provavelmente foi anunciada uma data de abertura que ainda nao chegou ao site. Le o extrato abaixo e marca a data.'
+                    : fonteNoticia && fonteBilheteira
+                      ? 'Sinal na **bilheteira e nas noticias** -- a venda esta a abrir agora.'
+                      : 'O sinal vem da **bilheteira oficial**.',
                   '',
                   'Confirma em https://bilheteira.fpf.pt/ e compra so em dominios `.fpf.pt`.',
                   'Se es socio Portugal+, usa o codigo promocional do email antes de finalizar.',

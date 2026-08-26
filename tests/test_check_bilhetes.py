@@ -244,5 +244,91 @@ class TestMonitorCego(unittest.TestCase):
             self.assertEqual(len([k for k in gravado if k != "_meta"]), 1)
 
 
+class TestAlvoDeNoticias(unittest.TestCase):
+    """O feed de noticias corre no mesmo motor da bilheteira, mas com outras
+    opcoes: sem sinais de bloqueio, sem deteccao de mudanca, e nao essencial."""
+
+    def alvo_noticias(self):
+        alvos = cb.resolver_alvos(CONFIG)
+        noticias = [a for a in alvos if not a["essencial"]]
+        self.assertEqual(len(noticias), 1, "esperava exatamente um alvo de noticias")
+        return noticias[0]
+
+    def test_opcoes_herdadas_e_redefinidas(self):
+        alvo = self.alvo_noticias()
+        self.assertEqual(alvo["match"], "noruega")          # herdado
+        self.assertEqual(alvo["sinais_bloqueio"], [])       # redefinido
+        self.assertFalse(alvo["detetar_mudanca"])           # redefinido
+        self.assertLess(alvo["janela"], CONFIG["janela"])   # redefinido
+
+    def test_bilheteira_continua_essencial(self):
+        alvos = cb.resolver_alvos(CONFIG)
+        essenciais = [a for a in alvos if a["essencial"]]
+        self.assertEqual(len(essenciais), 1)
+        self.assertIn("fpf.pt", essenciais[0]["url"])
+
+    def test_feed_sem_anuncio_nao_alerta(self):
+        r = analisar("rss_sem_anuncio.xml", cfg=self.alvo_noticias())
+        self.assertNotIn(r["estado"], (cb.A_VENDA, cb.ALTEROU))
+
+    def test_feed_com_anuncio_alerta(self):
+        r = analisar("rss_venda_anunciada.xml", cfg=self.alvo_noticias())
+        self.assertEqual(r["estado"], cb.A_VENDA)
+        self.assertTrue(r["sinais_venda"])
+
+    def test_mudanca_no_feed_nao_alerta(self):
+        """Um feed muda todos os dias; alertar por isso era ruido diario."""
+        base = analisar("rss_sem_anuncio.xml", cfg=self.alvo_noticias())
+        depois = analisar(
+            "rss_venda_anunciada.xml",
+            estado_anterior={"hash": base["hash"]},
+            cfg=self.alvo_noticias(),
+        )
+        # Alerta, mas por ter reconhecido as palavras -- nao por ter mudado.
+        self.assertEqual(depois["estado"], cb.A_VENDA)
+
+        sem_sinais = dict(self.alvo_noticias(), sinais_venda=[])
+        neutro = analisar(
+            "rss_venda_anunciada.xml",
+            estado_anterior={"hash": base["hash"]},
+            cfg=sem_sinais,
+        )
+        self.assertEqual(neutro["estado"], cb.SEM_SINAL)
+
+    def test_titulos_do_feed_nao_se_colam(self):
+        """Sem separadores, dois titulos seguidos criavam vizinhancas falsas."""
+        texto = cb.html_para_texto(
+            "<item><title>Noruega vence</title></item>"
+            "<item><title>Comprar bilhetes de teatro</title></item>"
+        )
+        janelas = cb.recortar_janelas(texto, "noruega", 12)
+        self.assertNotIn("Comprar", janelas[0])
+
+    def test_feed_em_baixo_nao_cega_o_monitor(self):
+        """Só a bilheteira conta para o interruptor de homem morto."""
+        with tempfile.TemporaryDirectory() as tmp:
+            estado = Path(tmp) / "estado.json"
+            resultados = [
+                {"url": "https://bilheteira.fpf.pt/", "estado": cb.BLOQUEADO, "essencial": True},
+                {"url": "https://news.google.com/rss", "estado": cb.SEM_CONTEUDO, "essencial": False},
+            ]
+            essenciais = [r for r in resultados if r["essencial"]]
+            cego = any(r["estado"] == cb.SEM_CONTEUDO for r in essenciais)
+            self.assertFalse(cego)
+            del estado
+
+
+class TestExtracaoRSS(unittest.TestCase):
+    def test_texto_do_feed_e_legivel(self):
+        html = (FIXTURES / "rss_venda_anunciada.xml").read_text(encoding="utf-8")
+        texto = cb.html_para_texto(html)
+        self.assertIn("Noruega", texto)
+        self.assertIn("à venda", texto)
+
+    def test_acentos_do_feed_sobrevivem(self):
+        html = (FIXTURES / "rss_venda_anunciada.xml").read_text(encoding="utf-8")
+        self.assertIn("pré-venda", cb.html_para_texto(html))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
