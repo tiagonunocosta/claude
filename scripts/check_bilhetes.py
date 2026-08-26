@@ -182,6 +182,23 @@ def normalizar_espacos(texto: str) -> str:
     return re.sub(r"\s+", " ", texto.replace("\xa0", " ")).strip()
 
 
+# Um feed RSS/Atom traz sempre um cabecalho de canal antes dos itens. Quando a
+# pesquisa inclui o nome do evento, o Google ecoa-a no <title>, no <link> e na
+# <description> do canal -- e essas ocorrencias, colonizadas pela boilerplate de
+# copyright, entravam na janela de contexto como se fossem noticias.
+PADRAO_ITEM = re.compile(r"<(item|entry)\b.*?</\1\s*>", re.IGNORECASE | re.DOTALL)
+PADRAO_FEED = re.compile(r"<(rss|feed)\b|<channel\b", re.IGNORECASE)
+
+
+def e_feed(documento: str) -> bool:
+    return bool(PADRAO_FEED.search(documento[:4000]))
+
+
+def itens_do_feed(documento: str) -> list[str]:
+    """Os blocos <item>/<entry>, sem o cabecalho do canal."""
+    return [m.group(0) for m in PADRAO_ITEM.finditer(documento)]
+
+
 def html_para_texto(html: str) -> str:
     extrator = ExtratorTexto()
     try:
@@ -274,9 +291,17 @@ def tem_preco(contexto: str) -> bool:
 
 
 def analisar(url: str, html: str, cfg: dict, estado_anterior: dict | None) -> dict:
-    texto = html_para_texto(html)
+    feed = e_feed(html)
+    if feed:
+        # So os itens. Um feed sem itens da texto vazio, e isso e um resultado
+        # legitimo ("nao ha noticias"), nao uma falha de leitura.
+        texto = html_para_texto("\n".join(itens_do_feed(html)))
+    else:
+        texto = html_para_texto(html)
+
     resultado: dict = {
         "url": url,
+        "formato": "feed" if feed else "html",
         "tamanho_html": len(html),
         "tamanho_texto": len(texto),
         "sinais_venda": [],
@@ -287,7 +312,10 @@ def analisar(url: str, html: str, cfg: dict, estado_anterior: dict | None) -> di
         "extrato": "",
     }
 
-    if len(texto) < cfg["min_texto"]:
+    # min_texto existe para apanhar uma pagina cujo conteudo vem por JavaScript.
+    # Num feed que soubemos parsear isso nao se aplica: pouco texto significa
+    # poucas noticias, o que e informacao e nao cegueira.
+    if not feed and len(texto) < cfg["min_texto"]:
         resultado["estado"] = SEM_CONTEUDO
         resultado["extrato"] = texto[:300]
         return resultado

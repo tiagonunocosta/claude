@@ -443,5 +443,62 @@ class TestPerfisDeCabecalhos(unittest.TestCase):
             self.assertNotIn("Accept-Encoding", perfil)
 
 
+class TestCabecalhoDoFeed(unittest.TestCase):
+    """O Google ecoa a pesquisa no <title>, <link> e <description> do canal.
+    Como a pesquisa contem "Noruega", essas ocorrencias entravam na janela de
+    contexto ao lado da boilerplate de copyright, como se fossem noticias."""
+
+    FEED_COM_ECO = (
+        '<?xml version="1.0"?><rss><channel>'
+        '<title>bilhetes "Portugal" "Noruega" - Google Notícias</title>'
+        '<description>Copyright 2026 Google. This XML feed is made available solely...</description>'
+        '<item><title>Haaland fala de Oslo</title>'
+        '<description>Sem relação com bilhetes.</description></item>'
+        "</channel></rss>"
+    )
+
+    def test_reconhece_um_feed(self):
+        self.assertTrue(cb.e_feed(self.FEED_COM_ECO))
+        self.assertTrue(cb.e_feed('<?xml version="1.0"?><feed xmlns="..."><entry/></feed>'))
+
+    def test_nao_confunde_html_com_feed(self):
+        html = (FIXTURES / "em_breve.html").read_text(encoding="utf-8")
+        self.assertFalse(cb.e_feed(html))
+
+    def test_itens_excluem_o_cabecalho(self):
+        itens = cb.itens_do_feed(self.FEED_COM_ECO)
+        self.assertEqual(len(itens), 1)
+        self.assertIn("Haaland", itens[0])
+        self.assertNotIn("Copyright", itens[0])
+        self.assertNotIn("Google Notícias", itens[0])
+
+    def test_eco_da_pesquisa_nao_produz_contexto(self):
+        alvo = [a for a in cb.resolver_alvos(CONFIG) if not a["essencial"]][0]
+        r = cb.analisar("feed://teste", self.FEED_COM_ECO, alvo, None)
+        self.assertEqual(r["formato"], "feed")
+        self.assertEqual(r["estado"], cb.NAO_LISTADO)
+        self.assertNotIn("Copyright", r["extrato"] or "")
+
+    def test_feed_vazio_e_ausencia_de_noticias_nao_cegueira(self):
+        """Zero itens significa 'nao ha noticias', nao 'nao consegui ler'."""
+        alvo = [a for a in cb.resolver_alvos(CONFIG) if not a["essencial"]][0]
+        vazio = '<?xml version="1.0"?><rss><channel><title>x</title></channel></rss>'
+        r = cb.analisar("feed://vazio", vazio, alvo, None)
+        self.assertEqual(r["estado"], cb.NAO_LISTADO)
+        self.assertNotEqual(r["estado"], cb.SEM_CONTEUDO)
+
+    def test_min_texto_continua_a_valer_para_html(self):
+        """A protecao contra apps de JavaScript nao pode ter-se perdido."""
+        r = analisar("shell_javascript.html")
+        self.assertEqual(r["estado"], cb.SEM_CONTEUDO)
+        self.assertEqual(r["formato"], "html")
+
+    def test_itens_reais_continuam_a_ser_lidos(self):
+        alvo = [a for a in cb.resolver_alvos(CONFIG) if not a["essencial"]][0]
+        r = analisar("rss_venda_anunciada.xml", cfg=alvo)
+        self.assertEqual(r["estado"], cb.A_VENDA)
+        self.assertIn("Dragão", r["extrato"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
